@@ -201,6 +201,7 @@ def delete_class(dataset_id):
 @auth_required
 def add_recordings(dataset_id):
     """Add recordings to a class in a dataset.
+    Only the author of a dataset should be able to add recordings to it.
 
     **Example request**:
 
@@ -224,6 +225,7 @@ def add_recordings(dataset_id):
 @auth_required
 def delete_recordings(dataset_id):
     """Delete recordings from a class in a dataset.
+    Only the author of a dataset should be able to delete recordings from it.
 
     **Example request**:
 
