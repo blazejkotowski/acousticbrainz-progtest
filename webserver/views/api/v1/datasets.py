@@ -87,7 +87,7 @@ def create_dataset():
 @auth_required
 def delete_dataset(dataset_id):
     """Delete a dataset."""
-    ds = get_dataset(dataset_id)
+    ds = get_check_dataset(dataset_id)
     if ds["author"] != current_user.id:
         raise api_exceptions.APIUnauthorized("You can't delete this dataset.")
     db.dataset.delete(ds["id"])
@@ -218,7 +218,25 @@ def add_recordings(dataset_id):
 
     :resheader Content-Type: *application/json*
     """
-    raise NotImplementedError
+
+    dataset_dict = get_check_dataset(dataset_id)
+    _validate_recordings_request(dataset_dict)
+    updated_dataset = _build_dataset_for_update(dataset_dict)
+    request_data = request.get_json()
+
+    class_index = [cls["name"] for cls in updated_dataset["classes"]].index(request_data["class_name"])
+    new_recordings = list(set(dataset_dict["classes"][class_index]["recordings"] + request_data["recordings"]))
+    updated_dataset["classes"][class_index]["recordings"] = new_recordings
+
+    try:
+        db.dataset.update(dataset_id, updated_dataset, current_user.id)
+    except dataset_validator.ValidationException as e:
+        raise api_exceptions.APIBadRequest(e.message)
+
+    return jsonify(
+        success=True,
+        message="Recordings have been added."
+    )
 
 
 @bp_datasets.route("/<uuid:dataset_id>/recordings", methods=["DELETE"])
@@ -242,8 +260,24 @@ def delete_recordings(dataset_id):
 
     :resheader Content-Type: *application/json*
     """
-    raise NotImplementedError
+    dataset_dict = get_check_dataset(dataset_id)
+    _validate_recordings_request(dataset_dict)
+    updated_dataset = _build_dataset_for_update(dataset_dict)
+    request_data = request.get_json()
 
+    class_index = [cls["name"] for cls in updated_dataset["classes"]].index(request_data["class_name"])
+    new_recordings = [recording for recording in dataset_dict["classes"][class_index]["recordings"] if recording not in request_data["recordings"]]
+    updated_dataset["classes"][class_index]["recordings"] = new_recordings
+
+    try:
+        db.dataset.update(dataset_id, updated_dataset, current_user.id)
+    except dataset_validator.ValidationException as e:
+        raise api_exceptions.APIBadRequest(e.message)
+
+    return jsonify(
+        success=True,
+        message="Recordings have been deleted."
+    )
 
 def get_check_dataset(dataset_id):
     """Wrapper for `dataset.get` function in `db` package. Meant for use with the API.
@@ -262,3 +296,61 @@ def get_check_dataset(dataset_id):
         return ds
     else:
         raise api_exceptions.APINotFound("Can't find this dataset.")
+
+
+def _validate_recordings_request(dataset_dict):
+    """Validates request body for add / delete recordings action, as well as
+    the ownership of the dataset resource
+
+    Ensure the following conditions are met:
+    - current user is the author of requested dataset
+    - request body contains all the fields required for add / delete recordings action
+    - requested class does exist in the dataset
+
+    Raises:
+        APIUnauthorized in case the ownership requirement is not faced
+        APIBadRequest in case some field is missing or requested class doesn't exist
+    """
+    # Ownership
+    if dataset_dict["author"] != current_user.id:
+        raise api_exceptions.APIUnauthorized("You can't modify this dataset.")
+
+    # Request body
+    request_data = request.get_json()
+    if not request_data:
+        raise api_exceptions.APIBadRequest("Data must be submitted in JSON format.")
+    for field_name in ["class_name", "recordings"]:
+        if field_name not in request_data:
+            raise api_exceptions.APIBadRequest("You have to provide `%s` field in the request body." % field_name)
+
+    # Class existence
+    class_names = [cls["name"] for cls in dataset_dict["classes"]]
+    if request_data["class_name"] not in class_names:
+        raise api_exceptions.APIBadRequest("Requested class doesn't exist in this dataset.")
+
+
+def _build_dataset_for_update(dataset_dict):
+    """Builds a structure ready for dataset update request
+
+    Args:
+        dataset_dict: (dictionary): dictionary returned by db.dataset.get method
+
+    Returns:
+        Minimal dictionary containing only properties valid
+        for update action, which are the following: `name`,
+        `description`, `public` and `classes` fields.
+    """
+    fields = ["name", "description", "public"]
+    new_dataset = {}
+    for field_name in fields:
+        new_dataset[field_name] = dataset_dict[field_name]
+
+    class_fields = ["name", "description", "recordings"]
+    new_classes = []
+    for cls in dataset_dict["classes"]:
+        new_class = {}
+        for field_name in class_fields:
+            new_class[field_name] = cls[field_name]
+        new_classes.append(new_class)
+    new_dataset["classes"] = new_classes
+    return new_dataset
